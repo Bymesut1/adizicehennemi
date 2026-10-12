@@ -1,12 +1,12 @@
 {
   "name": "abidizicehennemi",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "scrapers": [
     {
       "id": "abidizicehennemi",
       "name": "AbiDiziCehennemi",
       "description": "dizicehennemi.click film ve dizi, Türkçe",
-      "version": "1.0.0",
+      "version": "1.0.3",
       "filename": "providers/abidizicehennemi.js",
       "supportedTypes": ["movie", "tv"],
       "enabled": true
