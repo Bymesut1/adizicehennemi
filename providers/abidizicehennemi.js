@@ -7,7 +7,7 @@
 var AYAR = {
   SITE: 'https://dizicehennemi.click',
   EKLENTI_ADI: 'abidizicehennemi',
-  DEBUG_MODU: false,     // true: akış çıkmazsa nedenini "DEBUG" satırlarıyla gösterir
+  DEBUG_MODU: true,     // true: akış çıkmazsa nedenini "DEBUG" satırlarıyla gösterir
   DOGRULA: true,         // m3u8'i oynatmadan önce kontrol et
   ALTYAZI_YUKLE: true,   // WebVTT'yi SRT'ye çevirip geçici barındırıcıya yükle (Nuvio SRT okuyor)
   ALTYAZI_SAYISI: 2,
