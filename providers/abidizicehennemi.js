@@ -1,5 +1,5 @@
 // ============================================================
-//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.0
+//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.3
 //  Akış: TMDB -> film/dizi sayfası (başlıktan adres) -> oynatıcı (pilavyerplay) -> m3u8 (+ altyazı)
 //  Film:  /film/<slug>      Dizi: /dizi/<slug>/sezon-S/bolum-E
 // ============================================================
@@ -7,7 +7,7 @@
 var AYAR = {
   SITE: 'https://dizicehennemi.click',
   EKLENTI_ADI: 'abidizicehennemi',
-  DEBUG_MODU: true,     // true: akış çıkmazsa nedenini "DEBUG" satırlarıyla gösterir
+  DEBUG_MODU: true,      // true: akış çıkmazsa nedenini "DEBUG" satırlarıyla gösterir
   DOGRULA: true,         // m3u8'i oynatmadan önce kontrol et
   ALTYAZI_YUKLE: true,   // WebVTT'yi SRT'ye çevirip geçici barındırıcıya yükle (Nuvio SRT okuyor)
   ALTYAZI_SAYISI: 2,
@@ -299,7 +299,7 @@ function makeStream(u, v, subs, idx) {
 
 function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   var isTv = (mediaType === 'tv' || mediaType === 'series');
-  dbg = ['v1.0.0'];
+  dbg = ['v1.0.3'];
   var base = 'https://api.themoviedb.org/3/' + (isTv ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
     getJson(base + '&language=tr-TR'),
@@ -316,6 +316,12 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
       var pageUrl = pg.url, blobs = [clean(pg.html)];
       var pages = playerPages(pg.html);
       note('oynatici sayfa ' + pages.length);
+      var probe = clean(pg.html);
+      note('iframe ' + (probe.match(/<iframe/gi) || []).length);
+      (probe.match(/data-(?:id|video|source|embed|url|player)[\w-]*=["'][^"']{1,70}/gi) || []).slice(0, 5).forEach(function (x) { note('D ' + x); });
+      uniq(probe.match(/https?:\/\/[^"'\s<>\\)]+/g) || []).filter(function (u) {
+        return /pilav|player|embed|ajax|api|video|stream|m3u8|vtt|sub/i.test(u) && !ASSET.test(u);
+      }).slice(0, 10).forEach(function (u) { note('U ' + u.replace(/^https?:\/\//, '')); });
 
       return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })).then(function (rs) {
         var inner = [];
