@@ -1,5 +1,5 @@
 // ============================================================
-//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.7
+//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.9
 //  Akış: TMDB -> film/dizi sayfası (başlıktan adres) -> oynatıcı (pilavyerplay) -> m3u8 (+ altyazı)
 //  Film:  /film/<slug>      Dizi: /dizi/<slug>/sezon-S/bolum-E
 // ============================================================
@@ -263,6 +263,7 @@ function verifyUrl(u, sets) {
 // WebVTT -> SRT -> geçici barındırıcı (Nuvio SRT bekliyor)
 function prepSub(url, idx, pageUrl) {
   var sets = [
+    { 'User-Agent': UA, 'Referer': 'https://play2.pilavyerplay.top/', 'Origin': 'https://play2.pilavyerplay.top' },
     { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE },
     { 'User-Agent': UA, 'Referer': pageUrl },
     { 'User-Agent': UA }
@@ -299,7 +300,7 @@ function makeStream(u, v, subs, idx) {
 
 function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   var isTv = (mediaType === 'tv' || mediaType === 'series');
-  dbg = ['v1.0.7'];
+  dbg = ['v1.0.8'];
   var base = 'https://api.themoviedb.org/3/' + (isTv ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
     getJson(base + '&language=tr-TR'),
@@ -322,16 +323,26 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
         for (var i = 0, k = 0; i < str.length && k < n; i += 90, k++) note(tag + String.fromCharCode(97 + k) + ' ' + str.slice(i, i + 90));
       }
       var pv = (pg.html.match(/data-pv=["']([^"']{0,200})/i) || [])[1];
-      var coreSrc = (pg.html.match(/src=["'](https?:\/\/[^"']*pilavyerplay[^"']*core\.js[^"']*)/i) || [])[1];
-      if (coreSrc) {
-        extra = siteGet(coreSrc, pageUrl, 'K').then(function (r) {
-          var lines = String(r.text || '').split(/\r?\n/).map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(function (l) {
-            return l && /iframe|src|https?:|origin|embed|createElement|location|\/v\/|fetch|path|url/i.test(l);
-          });
-          note('k00 ' + r.status + ' satir ' + lines.length);
-          lines.slice(0, 34).forEach(function (l, n) { note('k' + (n < 9 ? '0' : '') + (n + 1) + ' ' + l); });
-        }).catch(function () { note('k00 core hata'); });
-      } else { note('k00 core src yok'); extra = Promise.resolve(); }
+      var PB = 'https://play2.pilavyerplay.top';
+      if (pv) {
+        var sUrl = PB + '/assets/js/s.php?s=' + encodeURIComponent(pv);
+        var H1 = { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Accept-Language': 'tr-TR,tr;q=0.9' };
+        extra = rawGet(sUrl, H1, 'S', 12000).then(function (r) {
+          var raw = String(r.text || ''), t = clean(raw);
+          blobs.push(t);
+          note('s0 ' + r.status + '/' + t.length);
+          chunks('s1', t.replace(/\s+/g, ' ').slice(0, 270), 3);
+          uniq(t.match(/https?:\/\/[^"'\s<>\\)]+/g) || []).filter(function (u) { return !ASSET.test(u); }).slice(0, 8).forEach(function (u, n) { note('u' + n + ' ' + u.replace(/^https?:\/\//, '')); });
+          var inner = innerFrames(raw).slice(0, 3);
+          return Promise.all(inner.map(function (u, n) {
+            return rawGet(u, { 'User-Agent': UA, 'Referer': sUrl, 'Origin': PB }, 'SI' + n, 12000).then(function (r2) {
+              var t2 = clean(r2.text || '');
+              blobs.push(t2);
+              note('i' + n + ' ' + r2.status + '/' + t2.length);
+            });
+          }));
+        }).catch(function (e) { note('s0 hata ' + (e && e.message)); });
+      } else { note('s0 pv yok'); extra = Promise.resolve(); }
       return extra.then(function () { return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })); }).then(function (rs) {
         var inner = [];
         rs.forEach(function (r) { if (r.status === 200) { blobs.push(clean(r.text)); inner = inner.concat(innerFrames(r.text)); } });
@@ -345,6 +356,7 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
         if (!streams.length) return debugStream('akis linki sayfada yok');
 
         var sets = [
+          { 'User-Agent': UA, 'Referer': 'https://play2.pilavyerplay.top/', 'Origin': 'https://play2.pilavyerplay.top' },
           { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE },
           { 'User-Agent': UA, 'Referer': pageUrl, 'Origin': AYAR.SITE },
           { 'User-Agent': UA }
