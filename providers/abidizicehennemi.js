@@ -1,5 +1,5 @@
 // ============================================================
-//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.6
+//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.7
 //  Akış: TMDB -> film/dizi sayfası (başlıktan adres) -> oynatıcı (pilavyerplay) -> m3u8 (+ altyazı)
 //  Film:  /film/<slug>      Dizi: /dizi/<slug>/sezon-S/bolum-E
 // ============================================================
@@ -176,7 +176,7 @@ function siteGet(path, ref, label) {
 }
 function debugStream(msg) {
   if (!AYAR.DEBUG_MODU) return [];
-  return [msg].concat(dbg.slice(0, 40)).map(function (r) {
+  return [msg].concat(dbg.slice(0, 60)).map(function (r) {
     return { name: 'DEBUG ' + r, title: 'DEBUG ' + r, url: 'https://debug.invalid/', quality: 'Auto', provider: PROVIDER_ID };
   });
 }
@@ -299,7 +299,7 @@ function makeStream(u, v, subs, idx) {
 
 function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   var isTv = (mediaType === 'tv' || mediaType === 'series');
-  dbg = ['v1.0.6'];
+  dbg = ['v1.0.7'];
   var base = 'https://api.themoviedb.org/3/' + (isTv ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
     getJson(base + '&language=tr-TR'),
@@ -322,28 +322,16 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
         for (var i = 0, k = 0; i < str.length && k < n; i += 90, k++) note(tag + String.fromCharCode(97 + k) + ' ' + str.slice(i, i + 90));
       }
       var pv = (pg.html.match(/data-pv=["']([^"']{0,200})/i) || [])[1];
-      chunks('5', 'pv ' + (pv || 'yok'), 3);
-      var tags = pg.html.match(/<[^>]*data-player-slot[^>]*>/gi) || [];
-      chunks('6', tags.slice(0, 2).join(' '), 3);
       var coreSrc = (pg.html.match(/src=["'](https?:\/\/[^"']*pilavyerplay[^"']*core\.js[^"']*)/i) || [])[1];
-      var PB = 'https://play2.pilavyerplay.top';
-      var cands = pv ? ['/' + pv, '/embed/' + pv, '/e/' + pv, '/v/' + pv, '/player/' + pv, '/video/' + pv] : [];
-      var tasks = cands.map(function (c, i) {
-        return siteGet(PB + c, pageUrl, 'C' + i).then(function (r) {
-          note('c' + i + ' ' + c.split('/')[1].slice(0, 6) + ' ' + r.status + '/' + (r.text || '').length + ' ' + String(r.text || '').replace(/\s+/g, ' ').slice(0, 50));
-        }).catch(function (e) { note('c' + i + ' hata'); });
-      });
       if (coreSrc) {
-        tasks.push(siteGet(coreSrc, pageUrl, 'K').then(function (r) {
-          var t = String(r.text || '');
-          note('core ' + r.status + '/' + t.length);
-          ['data-pv', 'fetch(', '/api', '.m3u8', 'subtitle'].forEach(function (key, n) {
-            var i = t.indexOf(key);
-            if (i >= 0) chunks('8' + n, t.slice(Math.max(0, i - 60), i + 160), 2);
+        extra = siteGet(coreSrc, pageUrl, 'K').then(function (r) {
+          var lines = String(r.text || '').split(/\r?\n/).map(function (l) { return l.replace(/\s+/g, ' ').trim(); }).filter(function (l) {
+            return l && /iframe|src|https?:|origin|embed|createElement|location|\/v\/|fetch|path|url/i.test(l);
           });
-        }).catch(function (e) { note('core hata'); }));
-      } else note('core src yok');
-      extra = Promise.all(tasks);
+          note('k00 ' + r.status + ' satir ' + lines.length);
+          lines.slice(0, 34).forEach(function (l, n) { note('k' + (n < 9 ? '0' : '') + (n + 1) + ' ' + l); });
+        }).catch(function () { note('k00 core hata'); });
+      } else { note('k00 core src yok'); extra = Promise.resolve(); }
       return extra.then(function () { return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })); }).then(function (rs) {
         var inner = [];
         rs.forEach(function (r) { if (r.status === 200) { blobs.push(clean(r.text)); inner = inner.concat(innerFrames(r.text)); } });
