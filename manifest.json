@@ -6,7 +6,7 @@
       "id": "abidizicehennemi",
       "name": "AbiDiziCehennemi",
       "description": "dizicehennemi.click film ve dizi, Türkçe",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "filename": "providers/abidizicehennemi.js",
       "supportedTypes": ["movie", "tv"],
       "enabled": true
