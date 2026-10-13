@@ -1,5 +1,5 @@
 // ============================================================
-//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.9
+//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.1.0
 //  Akış: TMDB -> film/dizi sayfası (başlıktan adres) -> oynatıcı (pilavyerplay) -> m3u8 (+ altyazı)
 //  Film:  /film/<slug>      Dizi: /dizi/<slug>/sezon-S/bolum-E
 // ============================================================
@@ -12,7 +12,7 @@ var AYAR = {
   ALTYAZI_YUKLE: true,   // WebVTT'yi SRT'ye çevirip geçici barındırıcıya yükle (Nuvio SRT okuyor)
   ALTYAZI_SAYISI: 2,
   ISTEK_SURESI: 8000,
-  GENEL_SURE: 25000
+  GENEL_SURE: 30000
 };
 
 var TMDB_KEY = '000316508321ce461cf81e7c6815eec7';
@@ -186,24 +186,26 @@ function isPlaylist(r) { return (r.status === 200 || r.status === 206) && /^\s*#
 
 function pageOkRes(r) { return r && r.status === 200 && /DiziCehennemi/i.test(r.text || '') && !/<title>[^<]*(404|bulunamad)/i.test(r.text || ''); }
 
-function findPage(titles, year, isTv, season, episode) {
-  var slugs = [];
+// Birden fazla aday adres dener; sayfası var olan TÜM adayları döndürür (ilk oynatılamazsa sıradakine geçilir)
+function findPages(titles, year, isTv, season, episode) {
+  var slugs = [], withYear = [];
   titles.forEach(function (t) {
     var s = slugify(t);
     if (!s) return;
     slugs.push(s);
-    if (year) slugs.push(s + '-' + year);
+    if (year) withYear.push(s + '-' + year);
   });
-  slugs = uniq(slugs).slice(0, 8);
+  slugs = uniq(slugs.concat(withYear)).slice(0, 10);
   var paths = slugs.map(function (s) {
     return isTv ? '/dizi/' + s + '/sezon-' + season + '/bolum-' + episode : '/film/' + s;
   });
   return Promise.all(paths.map(function (p) {
     return siteGet(p, null, 'P').then(function (r) { return { p: p, r: r, ok: pageOkRes(r) }; });
   })).then(function (list) {
-    for (var i = 0; i < list.length; i++) if (list[i].ok) { note('sayfa ' + list[i].p); return { url: AYAR.SITE + list[i].p, html: list[i].r.text }; }
-    note('sayfa yok: ' + paths.slice(0, 2).join(' '));
-    return null;
+    var found = [];
+    list.forEach(function (x) { if (x.ok && found.length < 3) { note('sayfa ' + x.p); found.push({ url: AYAR.SITE + x.p, html: x.r.text }); } });
+    if (!found.length) note('sayfa yok: ' + paths.slice(0, 2).join(' '));
+    return found;
   });
 }
 
@@ -296,11 +298,115 @@ function makeStream(u, v, subs, idx) {
   return s;
 }
 
+// ---------------- Oynatıcı belirteçleri (data-pv) ----------------
+
+// Sayfadaki TÜM data-pv değerlerini (uzunluk sınırı olmadan) ve s.php?s= bağlantılarını toplar
+function tokensIn(html) {
+  var out = [], m, re = /\sdata-pv\s*=\s*["']([^"']+)["']/gi;
+  while ((m = re.exec(html))) { var v = decodeHtml(m[1]).trim(); if (v) out.push(v); }
+  var t = clean(html), re2 = /s\.php\?s=([^"'&\s<>\\]+)/gi;
+  while ((m = re2.exec(t))) { var w = m[1]; try { w = decodeURIComponent(w); } catch (e) {} if (w) out.push(w); }
+  return uniq(out).slice(0, 6);
+}
+
+function playerHosts(html) {
+  var hs = ['https://play2.pilavyerplay.top'], m, t = clean(html), re = /https?:\/\/[a-z0-9.\-]*pilavyerplay[a-z0-9.\-]*/gi;
+  while ((m = re.exec(t))) hs.push(m[0].replace(/^http:/i, 'https:'));
+  return uniq(hs).slice(0, 3);
+}
+
+// Tek bir (sunucu, belirteç) çifti için s.php'yi dener; başlık/adres varyasyonlarıyla tekrar dener
+function fetchToken(host, pv, pageUrl, blobs, tag, state) {
+  var urls = [host + '/assets/js/s.php?s=' + encodeURIComponent(pv)];
+  if (/%[0-9a-f]{2}/i.test(pv)) urls.push(host + '/assets/js/s.php?s=' + pv);
+  var hdrs = [
+    { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Accept-Language': 'tr-TR,tr;q=0.9' },
+    { 'User-Agent': UA, 'Referer': pageUrl, 'Origin': AYAR.SITE, 'Accept-Language': 'tr-TR,tr;q=0.9' }
+  ];
+  var combos = [];
+  urls.forEach(function (u) { hdrs.forEach(function (h) { combos.push({ u: u, h: h }); }); });
+  function step(i) {
+    if (i >= combos.length) { note('S' + tag + ' hepsi basarisiz'); return Promise.resolve(false); }
+    var c = combos[i];
+    return rawGet(c.u, c.h, 'S' + tag + (i ? 'r' + i : ''), 12000).then(function (r) {
+      var raw = String(r.text || '');
+      if (r.status !== 200 || !raw || /<title>[^<]*bulunamad/i.test(raw)) return step(i + 1);
+      var t = clean(raw);
+      blobs.push(t);
+      state.host = state.host || host;
+      var inner = innerFrames(raw).slice(0, 3);
+      return Promise.all(inner.map(function (u, n) {
+        return rawGet(u, { 'User-Agent': UA, 'Referer': c.u, 'Origin': host }, 'SI' + tag + n, 12000).then(function (r2) { blobs.push(clean(r2.text || '')); });
+      })).then(function () { return true; });
+    });
+  }
+  return step(0);
+}
+
+// ---------------- Tek sayfadan akış çıkar ----------------
+
+function extract(pg, holder) {
+  var pageUrl = pg.url, blobs = [clean(pg.html)], state = { host: '' };
+  var pages = playerPages(pg.html);
+  note('oynatici sayfa ' + pages.length);
+  var tokens = tokensIn(pg.html), hosts = playerHosts(pg.html);
+  note('pv ' + tokens.length + ' [' + tokens.map(function (t) { return t.length; }).join(',') + ']');
+
+  function tryHosts(h) {
+    if (h >= hosts.length) return Promise.resolve();
+    var anyOk = false;
+    return Promise.all(tokens.map(function (pv, n) {
+      return fetchToken(hosts[h], pv, pageUrl, blobs, h + '' + n, state).then(function (ok) { if (ok) anyOk = true; });
+    })).then(function () { return anyOk ? null : tryHosts(h + 1); });
+  }
+  var extra = tokens.length ? tryHosts(0) : (note('s0 pv yok'), Promise.resolve());
+
+  return extra.then(function () {
+    return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); }));
+  }).then(function (rs) {
+    var inner = [];
+    rs.forEach(function (r) { if (r.status === 200) { blobs.push(clean(r.text)); inner = inner.concat(innerFrames(r.text)); } });
+    inner = uniq(inner).slice(0, 4);
+    return Promise.all(inner.map(function (u) { return siteGet(u, pageUrl, 'I'); }));
+  }).then(function (rs2) {
+    rs2.forEach(function (r) { if (r.status === 200) blobs.push(clean(r.text)); });
+
+    var streams = streamsIn(blobs).slice(0, 6), subUrls = subsIn(blobs).slice(0, AYAR.ALTYAZI_SAYISI);
+    note('akis ' + streams.length + ' sub ' + subUrls.length);
+    if (!streams.length) { note('akis linki sayfada yok'); return; }
+
+    var PB = state.host || 'https://play2.pilavyerplay.top';
+    var sets = [
+      { 'User-Agent': UA, 'Referer': PB + '/', 'Origin': PB },
+      { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE },
+      { 'User-Agent': UA, 'Referer': pageUrl, 'Origin': AYAR.SITE },
+      { 'User-Agent': UA }
+    ];
+    var subsP = Promise.all(subUrls.map(function (u, i) { return prepSub(u, i, pageUrl); })).then(function (a) {
+      var flat = []; a.forEach(function (x) { x.forEach(function (y) { flat.push(y); }); }); return flat;
+    });
+    return Promise.all([Promise.all(streams.map(function (u) { return verifyUrl(u, sets).then(function (v) { return { u: u, v: v }; }); })), subsP]).then(function (both2) {
+      var vs = both2[0], subsF = both2[1];
+      var good = vs.filter(function (x) { return x.v.ok; });
+      if (!good.length) { note('dogrulanamadi (yine de eklendi)'); good = vs.slice(0, 1); }
+      good.forEach(function (x, i) { holder.streams.push(makeStream(x.u, x.v, subsF, i)); });
+    });
+  });
+}
+
+function runPages(list, i, holder) {
+  if (i >= list.length) return Promise.resolve();
+  return extract(list[i], holder).catch(function (e) { note('hata ' + (e && e.message)); }).then(function () {
+    if (holder.streams.length) return;
+    return runPages(list, i + 1, holder);
+  });
+}
+
 // ---------------- Ana akış ----------------
 
 function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   var isTv = (mediaType === 'tv' || mediaType === 'series');
-  dbg = ['v1.0.8'];
+  dbg = ['v1.1.0'];
   var base = 'https://api.themoviedb.org/3/' + (isTv ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
     getJson(base + '&language=tr-TR'),
@@ -310,67 +416,12 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
     var titles = uniq([tr.title || tr.name, en.title || en.name, tr.original_title || tr.original_name]);
     var year = parseInt((tr.release_date || tr.first_air_date || '').slice(0, 4), 10) || 0;
     if (!titles.length) return debugStream('TMDB bilgisi eksik');
-    note('film ' + titles[0] + ' ' + year);
+    note((isTv ? 'dizi ' : 'film ') + titles[0] + ' ' + year);
 
-    return findPage(titles, isTv ? 0 : year, isTv, season, episode).then(function (pg) {
-      if (!pg) return debugStream('sayfa bulunamadi');
-      var pageUrl = pg.url, blobs = [clean(pg.html)];
-      var pages = playerPages(pg.html);
-      note('oynatici sayfa ' + pages.length);
-      var probe = clean(pg.html), extra;
-      function chunks(tag, str, n) {
-        str = String(str).replace(/\s+/g, ' ');
-        for (var i = 0, k = 0; i < str.length && k < n; i += 90, k++) note(tag + String.fromCharCode(97 + k) + ' ' + str.slice(i, i + 90));
-      }
-      var pv = (pg.html.match(/data-pv=["']([^"']{0,200})/i) || [])[1];
-      var PB = 'https://play2.pilavyerplay.top';
-      if (pv) {
-        var sUrl = PB + '/assets/js/s.php?s=' + encodeURIComponent(pv);
-        var H1 = { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Accept-Language': 'tr-TR,tr;q=0.9' };
-        extra = rawGet(sUrl, H1, 'S', 12000).then(function (r) {
-          var raw = String(r.text || ''), t = clean(raw);
-          blobs.push(t);
-          note('s0 ' + r.status + '/' + t.length);
-          chunks('s1', t.replace(/\s+/g, ' ').slice(0, 270), 3);
-          uniq(t.match(/https?:\/\/[^"'\s<>\\)]+/g) || []).filter(function (u) { return !ASSET.test(u); }).slice(0, 8).forEach(function (u, n) { note('u' + n + ' ' + u.replace(/^https?:\/\//, '')); });
-          var inner = innerFrames(raw).slice(0, 3);
-          return Promise.all(inner.map(function (u, n) {
-            return rawGet(u, { 'User-Agent': UA, 'Referer': sUrl, 'Origin': PB }, 'SI' + n, 12000).then(function (r2) {
-              var t2 = clean(r2.text || '');
-              blobs.push(t2);
-              note('i' + n + ' ' + r2.status + '/' + t2.length);
-            });
-          }));
-        }).catch(function (e) { note('s0 hata ' + (e && e.message)); });
-      } else { note('s0 pv yok'); extra = Promise.resolve(); }
-      return extra.then(function () { return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })); }).then(function (rs) {
-        var inner = [];
-        rs.forEach(function (r) { if (r.status === 200) { blobs.push(clean(r.text)); inner = inner.concat(innerFrames(r.text)); } });
-        inner = uniq(inner).slice(0, 4);
-        return Promise.all(inner.map(function (u) { return siteGet(u, pageUrl, 'I'); }));
-      }).then(function (rs2) {
-        rs2.forEach(function (r) { if (r.status === 200) blobs.push(clean(r.text)); });
-
-        var streams = streamsIn(blobs).slice(0, 6), subUrls = subsIn(blobs).slice(0, AYAR.ALTYAZI_SAYISI);
-        note('akis ' + streams.length + ' sub ' + subUrls.length);
-        if (!streams.length) return debugStream('akis linki sayfada yok');
-
-        var sets = [
-          { 'User-Agent': UA, 'Referer': 'https://play2.pilavyerplay.top/', 'Origin': 'https://play2.pilavyerplay.top' },
-          { 'User-Agent': UA, 'Referer': AYAR.SITE + '/', 'Origin': AYAR.SITE },
-          { 'User-Agent': UA, 'Referer': pageUrl, 'Origin': AYAR.SITE },
-          { 'User-Agent': UA }
-        ];
-        var subsP = Promise.all(subUrls.map(function (u, i) { return prepSub(u, i, pageUrl); })).then(function (a) {
-          var flat = []; a.forEach(function (x) { x.forEach(function (y) { flat.push(y); }); }); return flat;
-        });
-        return Promise.all([Promise.all(streams.map(function (u) { return verifyUrl(u, sets).then(function (v) { return { u: u, v: v }; }); })), subsP]).then(function (both2) {
-          var vs = both2[0], subsF = both2[1];
-          var good = vs.filter(function (x) { return x.v.ok; });
-          if (!good.length) { note('dogrulanamadi (yine de eklendi)'); good = vs.slice(0, 1); }
-          good.forEach(function (x, i) { holder.streams.push(makeStream(x.u, x.v, subsF, i)); });
-          return holder.streams.length ? holder.streams : debugStream('kaynak cikmadi');
-        });
+    return findPages(titles, year, isTv, season, episode).then(function (pgs) {
+      if (!pgs.length) return debugStream('sayfa bulunamadi');
+      return runPages(pgs, 0, holder).then(function () {
+        return holder.streams.length ? holder.streams : debugStream('kaynak cikmadi');
       });
     });
   }).catch(function (e) { return holder.streams.length ? holder.streams : debugStream('hata ' + (e && e.message)); });
