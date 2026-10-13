@@ -1,5 +1,5 @@
 // ============================================================
-//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.5
+//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.6
 //  Akış: TMDB -> film/dizi sayfası (başlıktan adres) -> oynatıcı (pilavyerplay) -> m3u8 (+ altyazı)
 //  Film:  /film/<slug>      Dizi: /dizi/<slug>/sezon-S/bolum-E
 // ============================================================
@@ -299,7 +299,7 @@ function makeStream(u, v, subs, idx) {
 
 function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   var isTv = (mediaType === 'tv' || mediaType === 'series');
-  dbg = ['v1.0.5'];
+  dbg = ['v1.0.6'];
   var base = 'https://api.themoviedb.org/3/' + (isTv ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
     getJson(base + '&language=tr-TR'),
@@ -325,19 +325,25 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
       chunks('5', 'pv ' + (pv || 'yok'), 3);
       var tags = pg.html.match(/<[^>]*data-player-slot[^>]*>/gi) || [];
       chunks('6', tags.slice(0, 2).join(' '), 3);
-      var appSrc = (pg.html.match(/src=["']([^"']*\/build\/assets\/app-[^"']+\.js)/i) || [])[1];
-      if (!appSrc) { note('app js yok'); extra = Promise.resolve(); }
-      else {
-        if (appSrc.indexOf('http') !== 0) appSrc = 'https://dizicehennemi.click' + appSrc;
-        extra = siteGet(appSrc, pageUrl, 'A').then(function (r) {
-          note('appjs ' + r.status + '/' + (r.text || '').length);
-          var t = String(r.text || ''), k = 0;
-          ['endpoint', 'data-pv', 'pilavyer', 'data-player-slot', '/api/'].forEach(function (key) {
-            var i = t.indexOf(key), c = 0;
-            while (i >= 0 && c < 2) { chunks('7' + key.charAt(0) + c, t.slice(Math.max(0, i - 120), i + 200), 3); i = t.indexOf(key, i + 400); c++; }
+      var coreSrc = (pg.html.match(/src=["'](https?:\/\/[^"']*pilavyerplay[^"']*core\.js[^"']*)/i) || [])[1];
+      var PB = 'https://play2.pilavyerplay.top';
+      var cands = pv ? ['/' + pv, '/embed/' + pv, '/e/' + pv, '/v/' + pv, '/player/' + pv, '/video/' + pv] : [];
+      var tasks = cands.map(function (c, i) {
+        return siteGet(PB + c, pageUrl, 'C' + i).then(function (r) {
+          note('c' + i + ' ' + c.split('/')[1].slice(0, 6) + ' ' + r.status + '/' + (r.text || '').length + ' ' + String(r.text || '').replace(/\s+/g, ' ').slice(0, 50));
+        }).catch(function (e) { note('c' + i + ' hata'); });
+      });
+      if (coreSrc) {
+        tasks.push(siteGet(coreSrc, pageUrl, 'K').then(function (r) {
+          var t = String(r.text || '');
+          note('core ' + r.status + '/' + t.length);
+          ['data-pv', 'fetch(', '/api', '.m3u8', 'subtitle'].forEach(function (key, n) {
+            var i = t.indexOf(key);
+            if (i >= 0) chunks('8' + n, t.slice(Math.max(0, i - 60), i + 160), 2);
           });
-        }).catch(function (e) { note('appjs hata ' + e); });
-      }
+        }).catch(function (e) { note('core hata'); }));
+      } else note('core src yok');
+      extra = Promise.all(tasks);
       return extra.then(function () { return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })); }).then(function (rs) {
         var inner = [];
         rs.forEach(function (r) { if (r.status === 200) { blobs.push(clean(r.text)); inner = inner.concat(innerFrames(r.text)); } });
