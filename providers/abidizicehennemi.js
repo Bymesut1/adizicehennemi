@@ -1,5 +1,5 @@
 // ============================================================
-//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.4
+//  abidizicehennemi — Nuvio scraper (dizicehennemi.click)              v1.0.5
 //  Akış: TMDB -> film/dizi sayfası (başlıktan adres) -> oynatıcı (pilavyerplay) -> m3u8 (+ altyazı)
 //  Film:  /film/<slug>      Dizi: /dizi/<slug>/sezon-S/bolum-E
 // ============================================================
@@ -299,7 +299,7 @@ function makeStream(u, v, subs, idx) {
 
 function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
   var isTv = (mediaType === 'tv' || mediaType === 'series');
-  dbg = ['v1.0.4'];
+  dbg = ['v1.0.5'];
   var base = 'https://api.themoviedb.org/3/' + (isTv ? 'tv' : 'movie') + '/' + tmdbId + '?api_key=' + TMDB_KEY;
   return Promise.all([
     getJson(base + '&language=tr-TR'),
@@ -316,21 +316,29 @@ function getStreamsInner(tmdbId, mediaType, season, episode, holder) {
       var pageUrl = pg.url, blobs = [clean(pg.html)];
       var pages = playerPages(pg.html);
       note('oynatici sayfa ' + pages.length);
-      var probe = clean(pg.html);
+      var probe = clean(pg.html), extra;
       function chunks(tag, str, n) {
         str = String(str).replace(/\s+/g, ' ');
         for (var i = 0, k = 0; i < str.length && k < n; i += 90, k++) note(tag + String.fromCharCode(97 + k) + ' ' + str.slice(i, i + 90));
       }
-      var ix = probe.indexOf('data-player-type');
-      chunks('1', ix >= 0 ? probe.slice(Math.max(0, ix - 200), ix + 300) : 'yok', 6);
-      var names = uniq((pg.html.match(/\sdata-[\w-]+(?=\s*=)/gi) || []).map(function (x) { return x.trim(); }));
-      chunks('2', names.join(' '), 3);
-      var scr = uniq((probe.match(/<script[^>]+src=["'][^"']+/gi) || []).map(function (x) { return x.replace(/^.*src=["']/, '').replace(/^https?:\/\//, ''); })).filter(function (x) { return !/googleapis|gstatic|jquery|cloudflare|googletagmanager/i.test(x); });
-      chunks('3', scr.join(' '), 3);
-      var ajx = uniq(probe.match(/(?:ajax|fetch\(|\$\.(?:post|get)|XMLHttpRequest|wp-json|\/api\/)[^;\n]{0,80}/gi) || []);
-      chunks('4', ajx.slice(0, 4).join(' | '), 4);
-
-      return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })).then(function (rs) {
+      var pv = (pg.html.match(/data-pv=["']([^"']{0,200})/i) || [])[1];
+      chunks('5', 'pv ' + (pv || 'yok'), 3);
+      var tags = pg.html.match(/<[^>]*data-player-slot[^>]*>/gi) || [];
+      chunks('6', tags.slice(0, 2).join(' '), 3);
+      var appSrc = (pg.html.match(/src=["']([^"']*\/build\/assets\/app-[^"']+\.js)/i) || [])[1];
+      if (!appSrc) { note('app js yok'); extra = Promise.resolve(); }
+      else {
+        if (appSrc.indexOf('http') !== 0) appSrc = 'https://dizicehennemi.click' + appSrc;
+        extra = siteGet(appSrc, pageUrl, 'A').then(function (r) {
+          note('appjs ' + r.status + '/' + (r.text || '').length);
+          var t = String(r.text || ''), k = 0;
+          ['endpoint', 'data-pv', 'pilavyer', 'data-player-slot', '/api/'].forEach(function (key) {
+            var i = t.indexOf(key), c = 0;
+            while (i >= 0 && c < 2) { chunks('7' + key.charAt(0) + c, t.slice(Math.max(0, i - 120), i + 200), 3); i = t.indexOf(key, i + 400); c++; }
+          });
+        }).catch(function (e) { note('appjs hata ' + e); });
+      }
+      return extra.then(function () { return Promise.all(pages.map(function (u) { return siteGet(u, pageUrl, 'E'); })); }).then(function (rs) {
         var inner = [];
         rs.forEach(function (r) { if (r.status === 200) { blobs.push(clean(r.text)); inner = inner.concat(innerFrames(r.text)); } });
         inner = uniq(inner).slice(0, 4);
